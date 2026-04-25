@@ -5,13 +5,13 @@ const fs = require("fs");
 const app = express();
 
 // 🔥 CONFIG
-const WEBHOOK_URL = "https://discord.com/api/webhooks/1488493691323809893/aUZGEgko2nD0qp-orAWjWIr8jctoCCuy-K8Ob3aBo2Gi_CIH9GlMX6kOXJ1lZ4xAnxrZ"; // thêm webhook mới của bạn
+const WEBHOOK_URL = "https://discord.com/api/webhooks/1488493691323809893/aUZGEgko2nD0qp-orAWjWIr8jctoCCuy-K8Ob3aBo2Gi_CIH9GlMX6kOXJ1lZ4xAnxrZ"; // thêm webhook mới
 const URL = "https://hanaminikata.com/status_trial_ugphone";
 const FILE = "message.json";
 
 const PORT = process.env.PORT || 3000;
 
-// 📊 STATUS (cache)
+// 📊 CACHE STATUS
 let currentStatus = {
     sg: false,
     hk: false,
@@ -20,6 +20,8 @@ let currentStatus = {
     us: false,
     lastUpdate: null
 };
+
+let isChecking = false; // tránh chạy chồng
 
 // 📥 load messageId
 function loadMessageId() {
@@ -37,17 +39,15 @@ function saveMessageId(id) {
 let messageId = loadMessageId();
 const startTime = Date.now();
 
-// ⏱ format uptime giống hình
+// ⏱ uptime giống ảnh
 function getUptime() {
     const diff = Date.now() - startTime;
-
     const h = Math.floor(diff / 3600000);
     const m = Math.floor((diff % 3600000) / 60000);
-
     return `${h}:${m.toString().padStart(2, "0")}`;
 }
 
-// 🎨 embed (SỬA uptime)
+// 🎨 embed
 function buildEmbed() {
     const icon = (v) => v ? "🟢" : "🔴";
 
@@ -68,27 +68,30 @@ function buildEmbed() {
 🔴 Hết máy
 
 🕜 Uptime: ${getUptime()} ngày ${new Date().toLocaleDateString("vi-VN")}`,
-                footer: { text: "Auto Up" }
+                footer: { text: "Anya Blox Trái Cây" }
             }
         ]
     };
 }
 
-// 🔍 CHECK STATUS (chạy nền, không block)
+// 🔍 CHECK STATUS (tối ưu)
 async function checkStatus() {
+    if (isChecking) return; // tránh chạy chồng
+    isChecking = true;
+
     try {
         const res = await axios.get(URL, {
             headers: {
-                "User-Agent": "Mozilla/5.0",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                 "Accept": "text/html",
-                "Referer": "https://google.com"
+                "Accept-Language": "en-US,en;q=0.9",
+                "Connection": "keep-alive"
             },
-            timeout: 8000
+            timeout: 6000
         });
 
         const html = res.data;
 
-        // logic cải tiến chút (đỡ fake hơn)
         currentStatus = {
             sg: html.includes("Singapore") && html.includes("Available"),
             hk: html.includes("Hong Kong") && html.includes("Available"),
@@ -98,13 +101,20 @@ async function checkStatus() {
             lastUpdate: new Date().toISOString()
         };
 
-        console.log("✔ Updated status");
+        console.log("✔ Updated");
     } catch (err) {
-        console.log("❌ Lỗi check:", err.message);
+        // bỏ spam 403
+        if (err.response?.status !== 403) {
+            console.log("❌ Lỗi:", err.message);
+        } else {
+            console.log("⚠️ 403 (bị chặn tạm)");
+        }
     }
+
+    isChecking = false;
 }
 
-// 📤 WEBHOOK (không block API)
+// 📤 WEBHOOK
 async function sendWebhook() {
     const data = buildEmbed();
 
@@ -121,31 +131,33 @@ async function sendWebhook() {
     }
 }
 
-// 🔁 LOOP (tách async hoàn toàn)
+// 🔁 LOOP (random nhẹ để tránh block)
 function startLoop() {
-    setInterval(async () => {
+    async function run() {
         await checkStatus();
         await sendWebhook();
-    }, 120000); // 2 phút (ổn định hơn)
 
-    // chạy ngay lần đầu
-    (async () => {
-        await checkStatus();
-        await sendWebhook();
-    })();
+        // delay random 2 → 3 phút
+        const delay = 120000 + Math.random() * 60000;
+        setTimeout(run, delay);
+    }
+
+    run();
 }
 
 startLoop();
 
-// 🌐 API (trả ngay, không chờ)
+// 🌐 API (siêu nhanh)
 app.get("/api/status", (req, res) => {
+    res.set("Cache-Control", "public, max-age=3"); // cache nhẹ
+
     res.json({
         success: true,
         data: currentStatus
     });
 });
 
-// test route
+// test
 app.get("/", (req, res) => {
     res.send("API UGPhone đang chạy!");
 });
