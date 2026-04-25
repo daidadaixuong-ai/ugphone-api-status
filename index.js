@@ -1,4 +1,3 @@
-const puppeteer = require("puppeteer");
 const axios = require("axios");
 const express = require("express");
 const fs = require("fs");
@@ -6,11 +5,10 @@ const fs = require("fs");
 const app = express();
 
 // 🔥 CONFIG
-const WEBHOOK_URL = "https://discord.com/api/webhooks/1488493691323809893/aUZGEgko2nD0qp-orAWjWIr8jctoCCuy-K8Ob3aBo2Gi_CIH9GlMX6kOXJ1lZ4xAnxrZ";
+const WEBHOOK_URL = "https://discord.com/api/webhooks/1488493691323809893/aUZGEgko2nD0qp-orAWjWIr8jctoCCuy-K8Ob3aBo2Gi_CIH9GlMX6kOXJ1lZ4xAnxrZ"; // ❗ ĐỪNG để webhook lộ như vừa rồi
 const URL = "https://hanaminikata.com/status_trial_ugphone";
 const FILE = "message.json";
 
-// 🌐 PORT (QUAN TRỌNG CHO RAILWAY)
 const PORT = process.env.PORT || 3000;
 
 // 📊 STATUS
@@ -76,39 +74,32 @@ function buildEmbed() {
     };
 }
 
-// 🔍 CHECK STATUS
+// 🔍 CHECK STATUS (KHÔNG puppeteer)
 async function checkStatus() {
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"]
-    });
-
-    const page = await browser.newPage();
-
     try {
-        await page.goto(URL, {
-            waitUntil: "networkidle2",
-            timeout: 60000
+        const res = await axios.get(URL, {
+            headers: {
+                "User-Agent": "Mozilla/5.0"
+            },
+            timeout: 10000
         });
 
-        await new Promise(r => setTimeout(r, 5000));
+        const html = res.data;
 
-        const text = await page.evaluate(() => document.body.innerText);
-
+        // ⚠️ logic đơn giản (có thể chỉnh sau)
         currentStatus = {
-            sg: text.includes("Singapore") && text.includes("Available"),
-            hk: text.includes("Hong Kong") && text.includes("Available"),
-            jp: text.includes("Japan") && text.includes("Available"),
-            de: text.includes("Germany") && text.includes("Available"),
-            us: text.includes("America") && text.includes("Available"),
+            sg: html.includes("Singapore"),
+            hk: html.includes("Hong Kong"),
+            jp: html.includes("Japan"),
+            de: html.includes("Germany"),
+            us: html.includes("America"),
             lastUpdate: new Date().toISOString()
         };
 
+        console.log("Đã cập nhật status");
     } catch (err) {
         console.log("Lỗi check:", err.message);
     }
-
-    await browser.close();
 }
 
 // 📤 WEBHOOK
@@ -134,6 +125,7 @@ async function loop() {
     await sendWebhook();
 }
 
+// chạy mỗi 60s
 setInterval(loop, 60000);
 loop();
 
@@ -143,6 +135,11 @@ app.get("/api/status", (req, res) => {
         success: true,
         data: currentStatus
     });
+});
+
+// test route
+app.get("/", (req, res) => {
+    res.send("API UGPhone đang chạy!");
 });
 
 app.listen(PORT, () => {
