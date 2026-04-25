@@ -22,19 +22,30 @@ let currentStatus = {
     lastUpdate: null
 };
 
-let messageId = fs.existsSync(FILE)
-    ? JSON.parse(fs.readFileSync(FILE)).id
-    : null;
+let messageId = null;
+
+// load message id safely
+try {
+    if (fs.existsSync(FILE)) {
+        const raw = JSON.parse(fs.readFileSync(FILE, "utf8"));
+        messageId = raw?.id || null;
+    }
+} catch (e) {
+    console.log("⚠️ Lỗi đọc message.json, reset id");
+    messageId = null;
+}
 
 const startTime = Date.now();
 let isChecking = false;
 
-// ⏱ uptime
+// ⏱ uptime (sửa đúng)
 function getUptime() {
     const diff = Date.now() - startTime;
-    const h = Math.floor(diff / 3600000);
+    const d = Math.floor(diff / 86400000);
+    const h = Math.floor((diff % 86400000) / 3600000);
     const m = Math.floor((diff % 3600000) / 60000);
-    return `${h}:${m.toString().padStart(2, "0")}`;
+
+    return `${d}d ${h}h ${m}m`;
 }
 
 // 🎨 embed
@@ -53,77 +64,73 @@ function buildEmbed() {
 🇩🇪 Germany - ${icon(currentStatus.de)}
 🇺🇸 America - ${icon(currentStatus.us)}
 
-**Chú thích**
 🟢 Còn máy
 🔴 Hết máy
 
-🕜 Uptime: ${getUptime()} ngày ${new Date().toLocaleDateString("vi-VN")}`,
-                footer: { text: "Auto Up" }
+⏱ Uptime: ${getUptime()}
+📅 ${new Date().toLocaleDateString("vi-VN")}`,
+                footer: { text: "Auto Updater" }
             }
         ]
     };
 }
 
-// 🔍 CHECK STATUS CHUẨN (VI + EN)
+// 🔍 CHECK STATUS
 async function checkStatus() {
     if (isChecking) return;
     isChecking = true;
 
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"]
-    });
-
-    const page = await browser.newPage();
+    let browser;
 
     try {
+        browser = await puppeteer.launch({
+            headless: "new",
+            args: ["--no-sandbox", "--disable-setuid-sandbox"]
+        });
+
+        const page = await browser.newPage();
+
         await page.goto(URL, {
             waitUntil: "networkidle2",
             timeout: 60000
         });
 
-        // đợi render xong (trang này load hơi chậm)
         await page.waitForSelector("body");
-        await new Promise(r => setTimeout(r, 5000));
+        await page.waitForTimeout(4000);
 
         const result = await page.evaluate(() => {
 
-            function checkCountry(name) {
-                // tìm mọi phần tử có chứa tên quốc gia
-                const nodes = Array.from(document.querySelectorAll("div, span, p, li"));
+            function getStatus(country) {
+                const all = Array.from(document.querySelectorAll("*"));
 
-                for (const node of nodes) {
-                    const text = node.innerText || "";
-                    if (!text.includes(name)) continue;
+                for (const el of all) {
+                    if (!el.innerText) continue;
+                    if (!el.innerText.includes(country)) continue;
 
-                    // lấy block cha gần nhất (chứa cả quốc gia + trạng thái)
-                    let parent = node;
-                    for (let i = 0; i < 5; i++) {
-                        if (!parent) break;
-                        const t = parent.innerText || "";
+                    const container = el.closest("div");
+                    if (!container) continue;
 
-                        // Ưu tiên tiếng Việt
-                        if (t.includes("Trạng thái: Có máy")) return true;
-                        if (t.includes("Trạng thái: Hết máy")) return false;
+                    const text = container.innerText;
 
-                        // fallback tiếng Anh
-                        const lower = t.toLowerCase();
-                        if (lower.includes("available")) return true;
-                        if (lower.includes("unavailable")) return false;
+                    // VI
+                    if (text.includes("Có máy")) return true;
+                    if (text.includes("Hết máy")) return false;
 
-                        parent = parent.parentElement;
-                    }
+                    // EN fallback
+                    const lower = text.toLowerCase();
+                    if (lower.includes("available")) return true;
+                    if (lower.includes("unavailable")) return false;
                 }
 
                 return false;
             }
 
             return {
-                sg: checkCountry("Singapore"),
-                hk: checkCountry("Hong Kong"),
-                jp: checkCountry("Japan"),
-                de: checkCountry("Germany"),
-                us: checkCountry("America")
+                sg: getStatus("Singapore"),
+                hk: getStatus("Hong Kong"),
+                jp: getStatus("Japan"),
+                de: getStatus("Germany"),
+                us: getStatus("America")
             };
         });
 
@@ -132,14 +139,14 @@ async function checkStatus() {
             lastUpdate: new Date().toISOString()
         };
 
-        console.log("✔ Updated REAL status:", currentStatus);
+        console.log("✔ Status updated:", currentStatus);
 
     } catch (err) {
-        console.log("❌ Puppeteer lỗi:", err.message);
+        console.log("❌ Check lỗi:", err.message);
+    } finally {
+        if (browser) await browser.close();
+        isChecking = false;
     }
-
-    await browser.close();
-    isChecking = false;
 }
 
 // 📤 WEBHOOK
@@ -149,17 +156,20 @@ async function sendWebhook() {
     try {
         if (!messageId) {
             const res = await axios.post(WEBHOOK_URL + "?wait=true", data);
-            messageId = res.data.id;
-            fs.writeFileSync(FILE, JSON.stringify({ id: messageId }));
+            messageId = res.data?.id;
+
+            if (messageId) {
+                fs.writeFileSync(FILE, JSON.stringify({ id: messageId }));
+            }
         } else {
             await axios.patch(`${WEBHOOK_URL}/messages/${messageId}`, data);
         }
     } catch (err) {
-        console.log("Webhook lỗi:", err.message);
+        console.log("❌ Webhook lỗi:", err.message);
     }
 }
 
-// 🔁 LOOP (không block API)
+// 🔁 LOOP
 function startLoop() {
     async function run() {
         await checkStatus();
@@ -172,7 +182,7 @@ function startLoop() {
 
 startLoop();
 
-// 🌐 API (tối ưu tốc độ)
+// 🌐 API
 app.get("/api/status", (req, res) => {
     res.set("Cache-Control", "public, max-age=5");
 
@@ -182,7 +192,6 @@ app.get("/api/status", (req, res) => {
     });
 });
 
-// test
 app.get("/", (req, res) => {
     res.send("API UGPhone đang chạy!");
 });
