@@ -5,13 +5,13 @@ const fs = require("fs");
 const app = express();
 
 // 🔥 CONFIG
-const WEBHOOK_URL = "https://discord.com/api/webhooks/1488493691323809893/aUZGEgko2nD0qp-orAWjWIr8jctoCCuy-K8Ob3aBo2Gi_CIH9GlMX6kOXJ1lZ4xAnxrZ"; // ❗ ĐỪNG để webhook lộ như vừa rồi
+const WEBHOOK_URL = "https://discord.com/api/webhooks/1488493691323809893/aUZGEgko2nD0qp-orAWjWIr8jctoCCuy-K8Ob3aBo2Gi_CIH9GlMX6kOXJ1lZ4xAnxrZ"; // thêm webhook mới của bạn
 const URL = "https://hanaminikata.com/status_trial_ugphone";
 const FILE = "message.json";
 
 const PORT = process.env.PORT || 3000;
 
-// 📊 STATUS
+// 📊 STATUS (cache)
 let currentStatus = {
     sg: false,
     hk: false,
@@ -37,16 +37,17 @@ function saveMessageId(id) {
 let messageId = loadMessageId();
 const startTime = Date.now();
 
-// ⏱ uptime
+// ⏱ format uptime giống hình
 function getUptime() {
     const diff = Date.now() - startTime;
+
     const h = Math.floor(diff / 3600000);
     const m = Math.floor((diff % 3600000) / 60000);
-    const s = Math.floor((diff % 60000) / 1000);
-    return `${h}h ${m}m ${s}s`;
+
+    return `${h}:${m.toString().padStart(2, "0")}`;
 }
 
-// 🎨 embed
+// 🎨 embed (SỬA uptime)
 function buildEmbed() {
     const icon = (v) => v ? "🟢" : "🔴";
 
@@ -56,53 +57,54 @@ function buildEmbed() {
                 title: "📱 Trạng thái UGPhone Trial 🏷️",
                 color: 0x00bfff,
                 description:
-`🇸🇬 Singapore ${icon(currentStatus.sg)}
-🇭🇰 Hong Kong ${icon(currentStatus.hk)}
-🇯🇵 Japan ${icon(currentStatus.jp)}
-🇩🇪 Germany ${icon(currentStatus.de)}
-🇺🇸 America ${icon(currentStatus.us)}
+`🇸🇬 Singapore - ${icon(currentStatus.sg)}
+🇭🇰 Hong Kong - ${icon(currentStatus.hk)}
+🇯🇵 Japan - ${icon(currentStatus.jp)}
+🇩🇪 Germany - ${icon(currentStatus.de)}
+🇺🇸 America - ${icon(currentStatus.us)}
 
 **Chú thích**
 🟢 Còn máy
 🔴 Hết máy
 
-🕜 Uptime: ${getUptime()}
-📅 ${new Date().toLocaleDateString("vi-VN")}`,
+🕜 Uptime: ${getUptime()} ngày ${new Date().toLocaleDateString("vi-VN")}`,
                 footer: { text: "Auto Up" }
             }
         ]
     };
 }
 
-// 🔍 CHECK STATUS (KHÔNG puppeteer)
+// 🔍 CHECK STATUS (chạy nền, không block)
 async function checkStatus() {
     try {
         const res = await axios.get(URL, {
             headers: {
-                "User-Agent": "Mozilla/5.0"
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "text/html",
+                "Referer": "https://google.com"
             },
-            timeout: 10000
+            timeout: 8000
         });
 
         const html = res.data;
 
-        // ⚠️ logic đơn giản (có thể chỉnh sau)
+        // logic cải tiến chút (đỡ fake hơn)
         currentStatus = {
-            sg: html.includes("Singapore"),
-            hk: html.includes("Hong Kong"),
-            jp: html.includes("Japan"),
-            de: html.includes("Germany"),
-            us: html.includes("America"),
+            sg: html.includes("Singapore") && html.includes("Available"),
+            hk: html.includes("Hong Kong") && html.includes("Available"),
+            jp: html.includes("Japan") && html.includes("Available"),
+            de: html.includes("Germany") && html.includes("Available"),
+            us: html.includes("America") && html.includes("Available"),
             lastUpdate: new Date().toISOString()
         };
 
-        console.log("Đã cập nhật status");
+        console.log("✔ Updated status");
     } catch (err) {
-        console.log("Lỗi check:", err.message);
+        console.log("❌ Lỗi check:", err.message);
     }
 }
 
-// 📤 WEBHOOK
+// 📤 WEBHOOK (không block API)
 async function sendWebhook() {
     const data = buildEmbed();
 
@@ -119,17 +121,23 @@ async function sendWebhook() {
     }
 }
 
-// 🔁 LOOP
-async function loop() {
-    await checkStatus();
-    await sendWebhook();
+// 🔁 LOOP (tách async hoàn toàn)
+function startLoop() {
+    setInterval(async () => {
+        await checkStatus();
+        await sendWebhook();
+    }, 120000); // 2 phút (ổn định hơn)
+
+    // chạy ngay lần đầu
+    (async () => {
+        await checkStatus();
+        await sendWebhook();
+    })();
 }
 
-// chạy mỗi 60s
-setInterval(loop, 60000);
-loop();
+startLoop();
 
-// 🌐 API
+// 🌐 API (trả ngay, không chờ)
 app.get("/api/status", (req, res) => {
     res.json({
         success: true,
